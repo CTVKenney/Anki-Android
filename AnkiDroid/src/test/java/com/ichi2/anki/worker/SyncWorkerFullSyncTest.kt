@@ -12,6 +12,7 @@ import anki.sync.syncAuth
 import anki.sync.syncCollectionResponse
 import com.ichi2.anki.CollectionManager
 import com.ichi2.anki.RobolectricTest
+import com.ichi2.anki.common.time.TimeManager
 import com.ichi2.anki.libanki.Collection
 import com.ichi2.anki.provider.VerifiedSyncApi
 import com.ichi2.anki.sync.SyncAuth
@@ -139,7 +140,7 @@ class SyncWorkerFullSyncTest : RobolectricTest() {
     @Test
     fun `verified sync returns a fresh count only after successful collection transfer`() =
         runTest {
-            val before = System.currentTimeMillis()
+            val before = TimeManager.time.intTimeMS()
             val result = runSync(ChangesRequired.FULL_DOWNLOAD, media = false, verified = true) as Result.Success
             assertEquals(1, transfers.size)
             assertEquals("success", result.outputData.getString("outcome"))

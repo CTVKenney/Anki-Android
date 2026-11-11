@@ -28,6 +28,7 @@ import com.ichi2.anki.NotificationChannel
 import com.ichi2.anki.R
 import com.ichi2.anki.cancelSync
 import com.ichi2.anki.common.permissions.canPostNotifications
+import com.ichi2.anki.common.time.TimeManager
 import com.ichi2.anki.libanki.Collection
 import com.ichi2.anki.notifications.NotificationId
 import com.ichi2.anki.provider.VerifiedSyncApi
@@ -118,7 +119,7 @@ class SyncWorker(
                         .putString("outcome", "success")
                         .putString("profile", inputData.getString("profile"))
                         .putInt("count", count)
-                        .putLong("completed_at", System.currentTimeMillis())
+                        .putLong("completed_at", TimeManager.time.intTimeMS())
                         .build(),
                 )
             }
