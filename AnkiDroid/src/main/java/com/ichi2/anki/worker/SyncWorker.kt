@@ -30,6 +30,7 @@ import com.ichi2.anki.cancelSync
 import com.ichi2.anki.common.permissions.canPostNotifications
 import com.ichi2.anki.libanki.Collection
 import com.ichi2.anki.notifications.NotificationId
+import com.ichi2.anki.provider.VerifiedSyncApi
 import com.ichi2.anki.reopen
 import com.ichi2.anki.setLastSyncTimeToNow
 import com.ichi2.anki.settings.Prefs
@@ -87,11 +88,40 @@ class SyncWorker(
     private suspend fun doWorkHoldingLock(): Result {
         trySetForeground(getForegroundInfo())
 
+        val verified = inputData.getBoolean("verified", false)
+        if (verified && inputData.getString("profile") != VerifiedSyncApi.profile(applicationContext)) {
+            return Result.failure(Data.Builder().putString("outcome", "profile_changed").build())
+        }
         val auth = inputData.toSyncAuth() ?: return Result.failure()
         val shouldSyncMedia = inputData.getBoolean(SYNC_MEDIA_KEY, false)
 
         try {
-            syncCollection(auth, shouldSyncMedia)
+            val completed = syncCollection(auth, shouldSyncMedia)
+            if (!completed) {
+                notificationManager?.cancel(NotificationId.SYNC)
+                return Result.failure(Data.Builder().putString("outcome", "direction_required").build())
+            }
+            if (verified) {
+                val count =
+                    try {
+                        withCol { findCards(inputData.getString("query")!!).size }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        notificationManager?.cancel(NotificationId.SYNC)
+                        return Result.failure(Data.Builder().putString("outcome", "query_failed").build())
+                    }
+                notificationManager?.cancel(NotificationId.SYNC)
+                return Result.success(
+                    Data
+                        .Builder()
+                        .putString("outcome", "success")
+                        .putString("profile", inputData.getString("profile"))
+                        .putInt("count", count)
+                        .putLong("completed_at", System.currentTimeMillis())
+                        .build(),
+                )
+            }
         } catch (cancellationException: CancellationException) {
             Timber.w(cancellationException, "SyncWorker cancelled (user tapped Cancel or WorkManager cancelled)")
             notificationManager?.cancel(NotificationId.SYNC)
@@ -107,7 +137,7 @@ class SyncWorker(
                 }
             }
             Timber.d("SyncWorker: showing failure notification")
-            return Result.failure()
+            return if (verified) Result.failure(Data.Builder().putString("outcome", "sync_failed").build()) else Result.failure()
         } finally {
             setLastSyncTimeToNow()
         }
@@ -121,7 +151,7 @@ class SyncWorker(
     private suspend fun syncCollection(
         auth: SyncAuth,
         syncMedia: Boolean,
-    ) {
+    ): Boolean {
         Timber.v("SyncWorker::syncCollection")
         val syncAuth =
             coroutineScope {
@@ -172,8 +202,9 @@ class SyncWorker(
                     // this doesn't wait for completion; the outer `coroutineScope` does.
                     monitor.cancel()
                 }
-            } ?: return
+            } ?: return false
         if (syncMedia) syncMedia(syncAuth)
+        return true
     }
 
     private fun Collection.fullSync(

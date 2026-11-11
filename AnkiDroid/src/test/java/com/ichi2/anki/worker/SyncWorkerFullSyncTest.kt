@@ -13,6 +13,7 @@ import anki.sync.syncCollectionResponse
 import com.ichi2.anki.CollectionManager
 import com.ichi2.anki.RobolectricTest
 import com.ichi2.anki.libanki.Collection
+import com.ichi2.anki.provider.VerifiedSyncApi
 import com.ichi2.anki.sync.SyncAuth
 import io.mockk.coEvery
 import io.mockk.every
@@ -135,6 +136,60 @@ class SyncWorkerFullSyncTest : RobolectricTest() {
             assertCollectionOpen()
         }
 
+    @Test
+    fun `verified sync returns a fresh count only after successful collection transfer`() =
+        runTest {
+            val before = System.currentTimeMillis()
+            val result = runSync(ChangesRequired.FULL_DOWNLOAD, media = false, verified = true) as Result.Success
+            assertEquals(1, transfers.size)
+            assertEquals("success", result.outputData.getString("outcome"))
+            assertEquals(0, result.outputData.getInt("count", -1))
+            assertEquals(VerifiedSyncApi.profile(targetContext), result.outputData.getString("profile"))
+            assertTrue(result.outputData.getLong("completed_at", 0) >= before)
+        }
+
+    @Test
+    fun `verified no changes is success but direction required never is`() =
+        runTest {
+            val result = runSync(ChangesRequired.NO_CHANGES, media = false, verified = true) as Result.Success
+            assertEquals("success", result.outputData.getString("outcome"))
+            val conflict = runSync(ChangesRequired.FULL_SYNC, media = false, verified = true) as Result.Failure
+            assertEquals("direction_required", conflict.outputData.getString("outcome"))
+            assertEquals(-1, conflict.outputData.getInt("count", -1))
+        }
+
+    @Test
+    fun `verified failed transfer has no count receipt`() =
+        runTest {
+            transferError = IllegalStateException("transfer failed")
+            val result = runSync(ChangesRequired.FULL_DOWNLOAD, media = false, verified = true) as Result.Failure
+            assertEquals("sync_failed", result.outputData.getString("outcome"))
+            assertEquals(-1, result.outputData.getInt("count", -1))
+        }
+
+    @Test
+    fun `invalid search after successful sync has no count receipt`() =
+        runTest {
+            every { backend.searchCards(any(), any()) } throws IllegalArgumentException("invalid query")
+            val result = runSync(ChangesRequired.NO_CHANGES, media = false, verified = true) as Result.Failure
+            assertEquals("query_failed", result.outputData.getString("outcome"))
+            assertEquals(-1, result.outputData.getInt("count", -1))
+        }
+
+    @Test
+    fun `changed profile rejects work before transferring collection`() =
+        runTest {
+            val result =
+                runSync(
+                    ChangesRequired.FULL_DOWNLOAD,
+                    media = false,
+                    verified = true,
+                    profile = "different-profile",
+                ) as Result.Failure
+            assertEquals("profile_changed", result.outputData.getString("outcome"))
+            assertTrue(transfers.isEmpty())
+        }
+
     private fun assertCollectionOpen() {
         assertFalse(collection.dbClosed)
         assertTrue(collection.decks.count() > 0)
@@ -143,6 +198,8 @@ class SyncWorkerFullSyncTest : RobolectricTest() {
     private suspend fun runSync(
         required: ChangesRequired,
         media: Boolean = true,
+        verified: Boolean = false,
+        profile: String? = null,
     ): Result {
         this.required = required
         backupCalls = 0
@@ -152,6 +209,9 @@ class SyncWorkerFullSyncTest : RobolectricTest() {
             Data
                 .Builder()
                 .putAll(SyncAuth(auth).toWorkData())
+                .putBoolean("verified", verified)
+                .putString("profile", if (verified) profile ?: VerifiedSyncApi.profile(targetContext) else "")
+                .putString("query", "prop:due<=-1")
                 .putBoolean("syncMedia", media)
                 .build()
         return TestListenableWorkerBuilder<SyncWorker>(targetContext, input).build().doWork()

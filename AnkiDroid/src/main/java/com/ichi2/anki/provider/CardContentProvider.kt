@@ -225,6 +225,26 @@ class CardContentProvider : ContentProvider() {
         return true
     }
 
+    override fun call(
+        method: String,
+        arg: String?,
+        extras: android.os.Bundle?,
+    ): android.os.Bundle? {
+        if (method != "verified_sync_v1" && method != "verified_sync_status_v1") {
+            return super.call(method, arg, extras)
+        }
+        // ContentProvider.call does not enforce read/write permissions automatically.
+        if (!hasReadWritePermission()) throw SecurityException("AnkiDroid database permission required")
+        val callerUid = android.os.Binder.getCallingUid()
+        applicationStartup.awaitCompletion()
+        val identity = android.os.Binder.clearCallingIdentity()
+        return try {
+            VerifiedSyncApi.call(context!!, callerUid, method, arg, extras)
+        } finally {
+            android.os.Binder.restoreCallingIdentity(identity)
+        }
+    }
+
     // keeps the nullability declared by the platform
     @Suppress("RedundantNullableReturnType")
     override fun getType(uri: Uri): String? {
